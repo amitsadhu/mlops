@@ -14,7 +14,7 @@ jobs:
   mlops-pipeline:
     name: MLOps Kubernetes Pipeline
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # Prevent hanging jobs
+    timeout-minutes: 45
     
     permissions:
       contents: read
@@ -26,71 +26,115 @@ jobs:
         with:
           fetch-depth: 0
       
-      - name: Validate PR Trigger
+      - name: Setup KinD
+        uses: engineerd/setup-kind@v0.6.0
+        with:
+          version: "v0.24.0"
+          skipClusterCreation: true
+      
+      - name: Validate Prerequisites
         run: |
-          echo "🔍 Validating PR trigger..."
+          echo "🔍 Validating prerequisites..."
           
-          # Create validation script if it doesn't exist
-          mkdir -p scripts
+          # Verify tools are available
+          kind version
+          kubectl version --client
+          docker version
           
-          # Run validation
-          if [[ -f "scripts/validate-pr-trigger.sh" ]]; then
-            bash scripts/validate-pr-trigger.sh
-          else
-            echo "✅ Basic PR trigger validation passed"
-            echo "PR #${{ github.event.number }} triggered successfully"
+          # Verify configuration files
+          if [[ ! -f "config/kind-cluster.yaml" ]]; then
+            echo "❌ KinD configuration not found"
+            exit 1
           fi
+          
+          echo "✅ All prerequisites validated"
       
-      - name: Setup Pipeline Context
-        id: context
+      - name: Provision Kubernetes Cluster
+        id: cluster-provision
         run: |
-          echo "📋 Setting up pipeline context..."
+          echo "🚀 Starting cluster provisioning..."
           
-          # Export context for later steps
-          echo "pr_number=${{ github.event.number }}" >> $GITHUB_OUTPUT
-          echo "pr_title=${{ github.event.pull_request.title }}" >> $GITHUB_OUTPUT
-          echo "pr_author=${{ github.event.pull_request.user.login }}" >> $GITHUB_OUTPUT
-          echo "base_ref=${{ github.base_ref }}" >> $GITHUB_OUTPUT
-          echo "head_ref=${{ github.head_ref }}" >> $GITHUB_OUTPUT
+          # Create config directory if it doesn't exist
+          mkdir -p config
           
-          # Log context for debugging
-          echo "Context set for PR #${{ github.event.number }}"
-          echo "Title: ${{ github.event.pull_request.title }}"
-          echo "Author: ${{ github.event.pull_request.user.login }}"
+          # Run cluster provisioning script
+          bash scripts/provision-cluster.sh
+          
+          # Export cluster status for later steps
+          echo "cluster_ready=true" >> $GITHUB_OUTPUT
+          echo "cluster_context=kind-${CLUSTER_NAME}" >> $GITHUB_OUTPUT
       
-      - name: Post Initial Status
+      - name: Validate Cluster Status
+        if: steps.cluster-provision.outputs.cluster_ready == 'true'
+        run: |
+          echo "🏥 Performing comprehensive cluster validation..."
+          
+          CONTEXT="kind-${CLUSTER_NAME}"
+          
+          # Test cluster connectivity
+          kubectl cluster-info --context "$CONTEXT"
+          
+          # Verify all nodes are ready
+          echo "📊 Node Status:"
+          kubectl get nodes --context "$CONTEXT" -o wide
+          
+          # Check system pods
+          echo "🔍 System Pods Status:"
+          kubectl get pods -n kube-system --context "$CONTEXT"
+          
+          # Verify we have the expected number of nodes
+          NODE_COUNT=$(kubectl get nodes --context "$CONTEXT" --no-headers | wc -l)
+          if [[ "$NODE_COUNT" -ne 3 ]]; then
+            echo "❌ Expected 3 nodes, found $NODE_COUNT"
+            exit 1
+          fi
+          
+          echo "✅ Cluster validation completed successfully"
+      
+      - name: Post Cluster Status to PR
+        if: always()
         uses: actions/github-script@v7
         with:
           script: |
-            const { data: comment } = await github.rest.issues.createComment({
+            const clusterReady = '${{ steps.cluster-provision.outputs.cluster_ready }}' === 'true';
+            const status = clusterReady ? '✅ Success' : '❌ Failed';
+            const emoji = clusterReady ? '🎉' : '💥';
+            
+            const body = `${emoji} **Task 2: Kubernetes Cluster Provisioning**
+            
+            **Status:** ${status}
+            **Cluster Name:** ${{ env.CLUSTER_NAME }}
+            **Nodes:** ${clusterReady ? '3 nodes (1 control-plane, 2 workers)' : 'Provisioning failed'}
+            
+            **Configuration:**
+            - Multi-node setup with KinD
+            - Port mappings for ingress (80, 443, 30080, 30081)
+            - Pod subnet: 10.244.0.0/16
+            - Service subnet: 10.96.0.0/12
+            
+            **Next Steps:**
+            ${clusterReady ? '- ✅ Ready for Task 3: Ingress Controller Setup' : '- 🔄 Retry cluster provisioning'}
+            
+            ---
+            *Updated at: ${new Date().toISOString()}*`;
+            
+            await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `🚀 **MLOps Pipeline Started**
-              
-              **PR Information:**
-              - Number: #${{ github.event.number }}
-              - Title: ${{ github.event.pull_request.title }}
-              - Author: @${{ github.event.pull_request.user.login }}
-              
-              **Pipeline Status:** ⏳ In Progress
-              
-              The MLOps pipeline is now running. This comment will be updated with results.
-              
-              ---
-              *Pipeline started at: ${new Date().toISOString()}*`
+              body: body
             });
-            
-            console.log('Posted initial status comment');
       
-      # Placeholder for next steps
-      - name: Pipeline Continuation
+      # Placeholder for next tasks
+      - name: Prepare for Next Tasks
+        if: steps.cluster-provision.outputs.cluster_ready == 'true'
         run: |
-          echo "🎯 PR trigger successful!"
-          echo "Ready for next steps:"
-          echo "  - Kubernetes cluster provisioning"
-          echo "  - Ingress controller deployment"
-          echo "  - Application deployments"
-          echo "  - Load testing"
-          echo "  - Results reporting"
+          echo "🎯 Cluster provisioning completed successfully!"
+          echo "Ready for upcoming tasks:"
+          echo "  - Task 3: Ingress Controller Deployment"
+          echo "  - Task 4: HTTP-echo Deployments"
+          echo "  - Task 5: Ingress Routing Configuration"
+          echo "  - Task 6: Health Checks"
+          echo "  - Task 7: Load Testing"
+          echo "  - Task 8: Results Reporting"
 
