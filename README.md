@@ -14,6 +14,7 @@ This project implements a comprehensive MLOps pipeline that automatically:
 
 ## 🏗️ Architecture
 
+```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
 │   GitHub PR     │───▶│  GitHub Actions  │───▶│  KinD Cluster   │
 │   Trigger       │    │     Workflow     │    │   (3 nodes)     │
@@ -40,6 +41,8 @@ This project implements a comprehensive MLOps pipeline that automatically:
          └────────────────────────────────────────────────┘
                               PR Comments
 
+```
+```
 
 ## 📋 Requirements Implemented
 
@@ -79,6 +82,8 @@ bash /scripts/load-test.sh
 4. View automated results in PR comments
 
 ## 📁 Project Structure
+
+```
 ├── .github/workflows/ 
 │   └── mlops-pipeline.yml          # Main CI/CD workflow 
 ├── config/ 
@@ -95,7 +100,8 @@ bash /scripts/load-test.sh
     ├── load-test-results/              # Generated test artifacts 
 |
 └── README.md                       # This documentation
-
+```
+```
 
 ## 🔧 Configuration
 
