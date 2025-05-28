@@ -14,7 +14,7 @@ jobs:
   mlops-pipeline:
     name: MLOps Kubernetes Pipeline
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # Prevent hanging jobs
+    timeout-minutes: 45
     
     permissions:
       contents: read
@@ -26,6 +26,230 @@ jobs:
         with:
           fetch-depth: 0
       
+      - name: Setup KinD
+        uses: engineerd/setup-kind@v0.6.0
+        with:
+          version: "v0.24.0"
+          skipClusterCreation: true
+      
+      - name: Validate Prerequisites
+        run: |
+          echo "🔍 Validating prerequisites..."
+          
+          # Verify tools are available
+          kind version
+          kubectl version --client
+          docker version
+          
+          # Verify configuration files
+          if [[ ! -f "config/kind-cluster.yaml" ]]; then
+            echo "❌ KinD configuration not found"
+            exit 1
+          fi
+          
+          echo "✅ All prerequisites validated"
+      
+      - name: Provision Kubernetes Cluster
+        id: cluster-provision
+        run: |
+          echo "🚀 Starting cluster provisioning..."
+          
+          # Create config directory if it doesn't exist
+          mkdir -p config
+          
+          # Run cluster provisioning script
+          bash scripts/provision-cluster.sh
+          
+          # Export cluster status for later steps
+          echo "cluster_ready=true" >> $GITHUB_OUTPUT
+          echo "cluster_context=kind-${CLUSTER_NAME}" >> $GITHUB_OUTPUT
+      
+      - name: Validate Cluster Status
+        if: steps.cluster-provision.outputs.cluster_ready == 'true'
+        run: |
+          echo "🏥 Performing comprehensive cluster validation..."
+          
+          CONTEXT="kind-${CLUSTER_NAME}"
+          
+          # Test cluster connectivity
+          kubectl cluster-info --context "$CONTEXT"
+          
+          # Verify all nodes are ready
+          echo "📊 Node Status:"
+          kubectl get nodes --context "$CONTEXT" -o wide
+          
+          # Check system pods
+          echo "🔍 System Pods Status:"
+          kubectl get pods -n kube-system --context "$CONTEXT"
+          
+          # Verify we have the expected number of nodes
+          NODE_COUNT=$(kubectl get nodes --context "$CONTEXT" --no-headers | wc -l)
+          if [[ "$NODE_COUNT" -ne 3 ]]; then
+            echo "❌ Expected 3 nodes, found $NODE_COUNT"
+            exit 1
+          fi
+          
+          echo "✅ Cluster validation completed successfully"
+      
+      - name: Deploy Ingress Controller
+        if: steps.cluster-provision.outputs.cluster_ready == 'true'
+        id: ingress-deploy
+        run: |
+          echo "📦 Deploying ingress controller and services..."
+          bash scripts/deploy-ingress.sh
+          echo "ingress_ready=true" >> $GITHUB_OUTPUT
+
+      - name: Test Ingress Connectivity
+        if: steps.ingress-deploy.outputs.ingress_ready == 'true'
+        id: ingress-test
+        run: |
+          echo "🧪 Testing ingress connectivity..."
+          bash scripts/test-ingress.sh
+          echo "ingress_test_passed=true" >> $GITHUB_OUTPUT
+
+      - name: Run Load Testing
+        if: steps.ingress-test.outputs.ingress_test_passed == 'true'
+        id: load-test
+        run: |
+          echo "🚀 Running load testing..."
+          bash scripts/load-test.sh
+          echo "load_test_completed=true" >> $GITHUB_OUTPUT
+      
+      - name: Post Cluster Status to PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const clusterReady = '${{ steps.cluster-provision.outputs.cluster_ready }}' === 'true';
+            const ingressReady = '${{ steps.ingress-deploy.outputs.ingress_ready }}' === 'true';
+            const ingressTestPassed = '${{ steps.ingress-test.outputs.ingress_test_passed }}' === 'true';
+            const loadTestCompleted = '${{ steps.load-test.outputs.load_test_completed }}' === 'true';
+            
+            const getStatus = (condition) => condition ? '✅ Success' : '❌ Failed';
+            const getEmoji = (condition) => condition ? '🎉' : '💥';
+            
+            let body = `## ${getEmoji(clusterReady)} MLOps Pipeline Status Report
+            
+            ### 📊 Pipeline Execution Summary
+            
+            | Task | Status | Details |
+            |------|--------|---------|
+            | **Cluster Provisioning** | ${getStatus(clusterReady)} | ${clusterReady ? '3 nodes (1 control-plane, 2 workers)' : 'Provisioning failed'} |
+            | **Ingress Deployment** | ${getStatus(ingressReady)} | ${ingressReady ? 'NGINX ingress controller deployed' : 'Deployment failed'} |
+            | **Health Validation** | ${getStatus(ingressTestPassed)} | ${ingressTestPassed ? 'foo.localhost & bar.localhost responding' : 'Connectivity tests failed'} |
+            | **Load Testing** | ${getStatus(loadTestCompleted)} | ${loadTestCompleted ? 'k6 load test executed' : 'Load test failed'} |
+            
+            ### 🔧 Infrastructure Configuration
+            - **Cluster Name:** ${{ env.CLUSTER_NAME }}
+            - **Port Mappings:** 80, 443, 30080, 30081
+            - **Pod Subnet:** 10.244.0.0/16
+            - **Service Subnet:** 10.96.0.0/12
+            
+            ### 🎯 Service Endpoints
+            ${ingressTestPassed ? '- ✅ http://foo.localhost (returns "foo")' : '- ❌ foo.localhost not accessible'}
+            ${ingressTestPassed ? '- ✅ http://bar.localhost (returns "bar")' : '- ❌ bar.localhost not accessible'}
+            `;
+            
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+      - name: Post Load Test Results to PR
+        if: always() && steps.load-test.outputs.load_test_completed == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            // Read load test results
+            let loadTestResults = 'Load test results not available';
+            try {
+              loadTestResults = fs.readFileSync('load-test-results/test-summary.md', 'utf8');
+            } catch (error) {
+              console.log('Could not read load test results:', error.message);
+              loadTestResults = `❌ **Load Test Results Unavailable**
+              
+              Error reading results: ${error.message}
+              
+              Please check the workflow logs for detailed information.`;
+            }
+            
+            const body = `## 🚀 Load Testing Results
+            
+            ${loadTestResults}
+            
+            ### 📈 Performance Analysis
+            - **Test Duration:** 30 seconds
+            - **Virtual Users:** 10 concurrent users
+            - **Target Services:** foo.localhost, bar.localhost
+            - **Traffic Pattern:** Randomized between services
+            
+            ### 🔍 Quality Gates
+            - **Response Time Threshold:** < 500ms (95th percentile)
+            - **Error Rate Threshold:** < 10%
+            - **Success Criteria:** All thresholds must be met
+            
+            ### 📊 CI Pipeline Completion Status
+            - ✅ **Task 2:** Kubernetes Cluster Provisioning
+            - ✅ **Task 3:** Ingress Controller Deployment  
+            - ✅ **Task 4:** HTTP-echo Service Deployments
+            - ✅ **Task 5:** Ingress Routing Configuration
+            - ✅ **Task 6:** Health Checks & Validation
+            - ✅ **Task 7:** Load Testing Execution
+            - ✅ **Task 8:** Automated Results Reporting
+            
+            ---
+            *Pipeline completed at: ${new Date().toISOString()}*
+            *Workflow run: ${{ github.run_id }}*`;
+            
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+      - name: Upload Load Test Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-test-results-${{ github.run_id }}
+          path: load-test-results/
+          retention-days: 30
+
+      - name: Upload Cluster Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cluster-debug-logs-${{ github.run_id }}
+          path: |
+            /tmp/kind-logs-*
+            ~/.kube/config
+          retention-days: 7
+          if-no-files-found: ignore
+      
+      - name: Pipeline Summary
+        if: always()
+        run: |
+          echo "🎯 MLOps Pipeline Execution Summary"
+          echo "=================================="
+          echo "Cluster Provisioning: ${{ steps.cluster-provision.outputs.cluster_ready == 'true' && '✅ SUCCESS' || '❌ FAILED' }}"
+          echo "Ingress Deployment: ${{ steps.ingress-deploy.outputs.ingress_ready == 'true' && '✅ SUCCESS' || '❌ FAILED' }}"
+          echo "Health Validation: ${{ steps.ingress-test.outputs.ingress_test_passed == 'true' && '✅ SUCCESS' || '❌ FAILED' }}"
+          echo "Load Testing: ${{ steps.load-test.outputs.load_test_completed == 'true' && '✅ SUCCESS' || '❌ FAILED' }}"
+          echo ""
+          echo "🔗 Artifacts uploaded for detailed analysis"
+          echo "📊 Results posted to PR for review"
+          echo ""
+          if [[ "${{ steps.load-test.outputs.load_test_completed }}" == "true" ]]; then
+            echo "🎉 All MLOps pipeline tasks completed successfully!"
+          else
+            echo "⚠️ Pipeline completed with some failures - check logs above"
+          fi
+=======
       - name: Validate PR Trigger
         run: |
           echo "🔍 Validating PR trigger..."
@@ -93,4 +317,5 @@ jobs:
           echo "  - Application deployments"
           echo "  - Load testing"
           echo "  - Results reporting"
+>>>>>>> 1629dec5755779cb0630a892f8c98e87fa03813d
 
