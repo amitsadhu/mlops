@@ -27,11 +27,12 @@ jobs:
           fetch-depth: 0
       
       - name: Setup KinD
-        uses: engineerd/setup-kind@v0.6.0
+        uses: engineerd/setup-kind@v0.6.2
         with:
           version: "v0.24.0"
           skipClusterCreation: true
-      
+          name: ${{ env.CLUSTER_NAME }}
+
       - name: Validate Prerequisites
         run: |
           echo "🔍 Validating prerequisites..."
@@ -249,73 +250,3 @@ jobs:
           else
             echo "⚠️ Pipeline completed with some failures - check logs above"
           fi
-=======
-      - name: Validate PR Trigger
-        run: |
-          echo "🔍 Validating PR trigger..."
-          
-          # Create validation script if it doesn't exist
-          mkdir -p scripts
-          
-          # Run validation
-          if [[ -f "scripts/validate-pr-trigger.sh" ]]; then
-            bash scripts/validate-pr-trigger.sh
-          else
-            echo "✅ Basic PR trigger validation passed"
-            echo "PR #${{ github.event.number }} triggered successfully"
-          fi
-      
-      - name: Setup Pipeline Context
-        id: context
-        run: |
-          echo "📋 Setting up pipeline context..."
-          
-          # Export context for later steps
-          echo "pr_number=${{ github.event.number }}" >> $GITHUB_OUTPUT
-          echo "pr_title=${{ github.event.pull_request.title }}" >> $GITHUB_OUTPUT
-          echo "pr_author=${{ github.event.pull_request.user.login }}" >> $GITHUB_OUTPUT
-          echo "base_ref=${{ github.base_ref }}" >> $GITHUB_OUTPUT
-          echo "head_ref=${{ github.head_ref }}" >> $GITHUB_OUTPUT
-          
-          # Log context for debugging
-          echo "Context set for PR #${{ github.event.number }}"
-          echo "Title: ${{ github.event.pull_request.title }}"
-          echo "Author: ${{ github.event.pull_request.user.login }}"
-      
-      - name: Post Initial Status
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { data: comment } = await github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `🚀 **MLOps Pipeline Started**
-              
-              **PR Information:**
-              - Number: #${{ github.event.number }}
-              - Title: ${{ github.event.pull_request.title }}
-              - Author: @${{ github.event.pull_request.user.login }}
-              
-              **Pipeline Status:** ⏳ In Progress
-              
-              The MLOps pipeline is now running. This comment will be updated with results.
-              
-              ---
-              *Pipeline started at: ${new Date().toISOString()}*`
-            });
-            
-            console.log('Posted initial status comment');
-      
-      # Placeholder for next steps
-      - name: Pipeline Continuation
-        run: |
-          echo "🎯 PR trigger successful!"
-          echo "Ready for next steps:"
-          echo "  - Kubernetes cluster provisioning"
-          echo "  - Ingress controller deployment"
-          echo "  - Application deployments"
-          echo "  - Load testing"
-          echo "  - Results reporting"
->>>>>>> 1629dec5755779cb0630a892f8c98e87fa03813d
-
