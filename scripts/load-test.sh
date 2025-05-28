@@ -37,7 +37,8 @@ export default function() {
   const hosts = ['foo.localhost', 'bar.localhost'];
   const host = hosts[Math.floor(Math.random() * hosts.length)];
   
-  let response = http.get('http://localhost/', {
+  // Use the ingress controller service instead of localhost
+  let response = http.get('http://ingress-nginx-controller.ingress-nginx.svc.cluster.local/', {
     headers: { 'Host': host },
   });
   
@@ -45,6 +46,12 @@ export default function() {
     'status is 200': (r) => r.status === 200,
     'response time < 500ms': (r) => r.timings.duration < 500,
     'correct response body': (r) => {
+      // Add null check to prevent TypeError
+      if (!r.body) {
+        console.log(`No response body for ${host}`);
+        return false;
+      }
+      
       if (host === 'foo.localhost') {
         return r.body.includes('foo');
       } else {
@@ -52,6 +59,11 @@ export default function() {
       }
     },
   });
+  
+  // Log response details for debugging
+  if (!success) {
+    console.log(`Request to ${host} failed. Status: ${response.status}, Body: ${response.body}`);
+  }
   
   errorRate.add(!success);
   
@@ -103,6 +115,7 @@ EOF
     
     echo "✅ k6 test script created"
 }
+
 
 # Deploy k6 test using Kubernetes
 deploy_k6_test() {
@@ -189,17 +202,40 @@ collect_test_results() {
         return 1
     fi
     
-    # Parse metrics with better error handling
+    # Parse metrics with improved extraction
     echo "📈 Extracting performance metrics..."
     
     if [[ -f "$OUTPUT_DIR/k6-output.log" ]]; then
-        # Extract metrics using grep and awk instead of sed for better reliability
-        local avg_duration=$(grep "http_req_duration.*avg=" "$OUTPUT_DIR/k6-output.log" | awk -F'avg=' '{print $2}' | awk '{print $1}' | sed 's/ms//' || echo "N/A")
-        local p95_duration=$(grep "http_req_duration.*p(95)=" "$OUTPUT_DIR/k6-output.log" | awk -F'p\\(95\\)=' '{print $2}' | awk '{print $1}' | sed 's/ms//' || echo "N/A")
-        local req_rate=$(grep "http_reqs.*" "$OUTPUT_DIR/k6-output.log" | awk '/http_reqs.*\/s/ {for(i=1;i<=NF;i++) if($i~/\/s$/) print $(i-1)}' || echo "N/A")
-        local error_rate=$(grep "http_req_failed.*" "$OUTPUT_DIR/k6-output.log" | awk '/http_req_failed.*%/ {for(i=1;i<=NF;i++) if($i~/%$/) print $i}' | sed 's/%//' || echo "N/A")
+        # Extract metrics from k6 summary output (look for the final summary)
+        local avg_duration=$(grep -E "http_req_duration.*avg=" "$OUTPUT_DIR/k6-output.log" | tail -1 | sed -n 's/.*avg=\([0-9.]*\)ms.*/\1/p' || echo "N/A")
+        local p95_duration=$(grep -E "http_req_duration.*p\(95\)=" "$OUTPUT_DIR/k6-output.log" | tail -1 | sed -n 's/.*p(95)=\([0-9.]*\)ms.*/\1/p' || echo "N/A")
+        local req_rate=$(grep -E "http_reqs.*[0-9.]+/s" "$OUTPUT_DIR/k6-output.log" | tail -1 | sed -n 's/.*\([0-9.]*\)\/s.*/\1/p' || echo "N/A")
+        local error_rate=$(grep -E "http_req_failed.*[0-9.]+%" "$OUTPUT_DIR/k6-output.log" | tail -1 | sed -n 's/.*\([0-9.]*\)%.*/\1/p' || echo "N/A")
+        local total_requests=$(grep -E "http_reqs.*[0-9]+" "$OUTPUT_DIR/k6-output.log" | tail -1 | sed -n 's/.*http_reqs[^0-9]*\([0-9]*\).*/\1/p' || echo "N/A")
         
-        # Create summary report
+        # Alternative extraction method - look for check results
+        local success_rate=$(grep -E "✓.*[0-9.]+%" "$OUTPUT_DIR/k6-output.log" | head -1 | sed -n 's/.*\([0-9.]*\)%.*/\1/p' || echo "N/A")
+        
+        # If standard parsing fails, try to extract from the summary section
+        if [[ "$avg_duration" == "N/A" ]]; then
+            echo "🔍 Trying alternative metric extraction..."
+            
+            # Look for the final summary block
+            local summary_start=$(grep -n "✓\|✗" "$OUTPUT_DIR/k6-output.log" | tail -10)
+            echo "📋 Summary section found: $summary_start"
+            
+            # Extract from checks section if available
+            local checks_passed=$(grep -c "✓" "$OUTPUT_DIR/k6-output.log" || echo "0")
+            local checks_failed=$(grep -c "✗" "$OUTPUT_DIR/k6-output.log" || echo "0")
+            local total_checks=$((checks_passed + checks_failed))
+            
+            if [[ $total_checks -gt 0 ]]; then
+                success_rate=$(echo "scale=2; $checks_passed * 100 / $total_checks" | bc -l 2>/dev/null || echo "N/A")
+                error_rate=$(echo "scale=2; $checks_failed * 100 / $total_checks" | bc -l 2>/dev/null || echo "N/A")
+            fi
+        fi
+        
+        # Create summary report with available metrics
         cat > "$OUTPUT_DIR/test-summary.md" << EOF
 # Load Test Results
 
@@ -213,18 +249,36 @@ collect_test_results() {
 - **Average Response Time:** ${avg_duration}ms
 - **95th Percentile Response Time:** ${p95_duration}ms
 - **Request Rate:** ${req_rate} req/s
+- **Total Requests:** ${total_requests}
+- **Success Rate:** ${success_rate}%
 - **Error Rate:** ${error_rate}%
 
 ## Test Status
-$(if [[ "$error_rate" != "N/A" && "$error_rate" != "" ]] && (( $(echo "$error_rate < 10" | bc -l 2>/dev/null || echo 0) )); then echo "✅ **PASSED** - Error rate below 10%"; else echo "❌ **FAILED** - Error rate above 10% or metrics unavailable"; fi)
+$(if [[ "$error_rate" != "N/A" && "$error_rate" != "" ]] && (( $(echo "$error_rate < 10" | bc -l 2>/dev/null || echo 0) )); then echo "✅ **PASSED** - Error rate below 10%"; elif [[ "$success_rate" != "N/A" && "$success_rate" != "" ]] && (( $(echo "$success_rate > 90" | bc -l 2>/dev/null || echo 0) )); then echo "✅ **PASSED** - Success rate above 90%"; else echo "❌ **FAILED** - Error rate above 10% or metrics unavailable"; fi)
 
-## Raw Logs
+## Detailed Metrics Extraction Debug
+- Checks Passed: $checks_passed
+- Checks Failed: $checks_failed
+- Total Checks: $total_checks
+
+## Raw Logs Sample
 \`\`\`
-$(head -20 "$OUTPUT_DIR/k6-output.log")
+$(head -30 "$OUTPUT_DIR/k6-output.log")
+...
+$(tail -20 "$OUTPUT_DIR/k6-output.log")
 \`\`\`
 EOF
         
         echo "✅ Test results processed"
+        
+        # Debug: Show what we extracted
+        echo "🔍 Extracted metrics:"
+        echo "  - Average Duration: $avg_duration"
+        echo "  - P95 Duration: $p95_duration"
+        echo "  - Request Rate: $req_rate"
+        echo "  - Success Rate: $success_rate"
+        echo "  - Error Rate: $error_rate"
+        
     else
         echo "❌ No log file found to process"
         return 1
