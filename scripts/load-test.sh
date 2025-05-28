@@ -188,54 +188,66 @@ collect_test_results() {
     if [[ -n "$pod_name" ]]; then
         echo "📋 Getting logs from pod: $pod_name"
         
-        # Get logs with better error handling
         if kubectl logs "$pod_name" --context "$CONTEXT" > "$OUTPUT_DIR/k6-output.log" 2>&1; then
             echo "✅ Logs collected successfully"
         else
             echo "❌ Failed to collect logs"
-            kubectl describe pod "$pod_name" --context "$CONTEXT" > "$OUTPUT_DIR/pod-debug.log"
             return 1
         fi
     else
         echo "❌ No pod found for k6 job"
-        kubectl get pods --context "$CONTEXT" > "$OUTPUT_DIR/all-pods.log"
         return 1
     fi
     
-    # Parse metrics with improved extraction
+    # Parse metrics with safe arithmetic
     echo "📈 Extracting performance metrics..."
     
     if [[ -f "$OUTPUT_DIR/k6-output.log" ]]; then
-        # Extract metrics from k6 summary output (look for the final summary)
-        local avg_duration=$(grep -E "http_req_duration.*avg=" "$OUTPUT_DIR/k6-output.log" | tail -1 | sed -n 's/.*avg=\([0-9.]*\)ms.*/\1/p' || echo "N/A")
-        local p95_duration=$(grep -E "http_req_duration.*p\(95\)=" "$OUTPUT_DIR/k6-output.log" | tail -1 | sed -n 's/.*p(95)=\([0-9.]*\)ms.*/\1/p' || echo "N/A")
-        local req_rate=$(grep -E "http_reqs.*[0-9.]+/s" "$OUTPUT_DIR/k6-output.log" | tail -1 | sed -n 's/.*\([0-9.]*\)\/s.*/\1/p' || echo "N/A")
-        local error_rate=$(grep -E "http_req_failed.*[0-9.]+%" "$OUTPUT_DIR/k6-output.log" | tail -1 | sed -n 's/.*\([0-9.]*\)%.*/\1/p' || echo "N/A")
-        local total_requests=$(grep -E "http_reqs.*[0-9]+" "$OUTPUT_DIR/k6-output.log" | tail -1 | sed -n 's/.*http_reqs[^0-9]*\([0-9]*\).*/\1/p' || echo "N/A")
+        # Extract metrics using safer methods
+        local avg_duration=$(grep -E "http_req_duration.*avg=" "$OUTPUT_DIR/k6-output.log" | tail -1 | sed -n 's/.*avg=\([0-9.]*\)ms.*/\1/p')
+        local p95_duration=$(grep -E "http_req_duration.*p\(95\)=" "$OUTPUT_DIR/k6-output.log" | tail -1 | sed -n 's/.*p(95)=\([0-9.]*\)ms.*/\1/p')
+        local req_rate=$(grep -E "http_reqs.*[0-9.]+/s" "$OUTPUT_DIR/k6-output.log" | tail -1 | sed -n 's/.*\([0-9.]*\)\/s.*/\1/p')
+        local error_rate=$(grep -E "http_req_failed.*[0-9.]+%" "$OUTPUT_DIR/k6-output.log" | tail -1 | sed -n 's/.*\([0-9.]*\)%.*/\1/p')
+        local total_requests=$(grep -E "http_reqs.*[0-9]+" "$OUTPUT_DIR/k6-output.log" | tail -1 | sed -n 's/.*http_reqs[^0-9]*\([0-9]*\).*/\1/p')
         
-        # Alternative extraction method - look for check results
-        local success_rate=$(grep -E "✓.*[0-9.]+%" "$OUTPUT_DIR/k6-output.log" | head -1 | sed -n 's/.*\([0-9.]*\)%.*/\1/p' || echo "N/A")
+        # Safe defaults for empty values
+        avg_duration=${avg_duration:-"N/A"}
+        p95_duration=${p95_duration:-"N/A"}
+        req_rate=${req_rate:-"N/A"}
+        error_rate=${error_rate:-"N/A"}
+        total_requests=${total_requests:-"N/A"}
         
-        # If standard parsing fails, try to extract from the summary section
-        if [[ "$avg_duration" == "N/A" ]]; then
-            echo "🔍 Trying alternative metric extraction..."
-            
-            # Look for the final summary block
-            local summary_start=$(grep -n "✓\|✗" "$OUTPUT_DIR/k6-output.log" | tail -10)
-            echo "📋 Summary section found: $summary_start"
-            
-            # Extract from checks section if available
-            local checks_passed=$(grep -c "✓" "$OUTPUT_DIR/k6-output.log" || echo "0")
-            local checks_failed=$(grep -c "✗" "$OUTPUT_DIR/k6-output.log" || echo "0")
+        # Safe check counting with proper sanitization
+        local checks_passed=$(grep -c "✓" "$OUTPUT_DIR/k6-output.log" 2>/dev/null || echo "0")
+        local checks_failed=$(grep -c "✗" "$OUTPUT_DIR/k6-output.log" 2>/dev/null || echo "0")
+        
+        # Clean the variables to remove any newlines or special characters
+        checks_passed=$(echo "$checks_passed" | tr -d '\n\r' | grep -o '[0-9]*' | head -1)
+        checks_failed=$(echo "$checks_failed" | tr -d '\n\r' | grep -o '[0-9]*' | head -1)
+        
+        # Set defaults if empty
+        checks_passed=${checks_passed:-0}
+        checks_failed=${checks_failed:-0}
+        
+        # Safe arithmetic calculation
+        local success_rate="N/A"
+        local calculated_error_rate="N/A"
+        
+        if [[ "$checks_passed" =~ ^[0-9]+$ ]] && [[ "$checks_failed" =~ ^[0-9]+$ ]]; then
             local total_checks=$((checks_passed + checks_failed))
-            
             if [[ $total_checks -gt 0 ]]; then
-                success_rate=$(echo "scale=2; $checks_passed * 100 / $total_checks" | bc -l 2>/dev/null || echo "N/A")
-                error_rate=$(echo "scale=2; $checks_failed * 100 / $total_checks" | bc -l 2>/dev/null || echo "N/A")
+                # Use awk for safer floating point arithmetic
+                success_rate=$(awk "BEGIN {printf \"%.2f\", $checks_passed * 100 / $total_checks}")
+                calculated_error_rate=$(awk "BEGIN {printf \"%.2f\", $checks_failed * 100 / $total_checks}")
             fi
         fi
         
-        # Create summary report with available metrics
+        # Use calculated error rate if original parsing failed
+        if [[ "$error_rate" == "N/A" && "$calculated_error_rate" != "N/A" ]]; then
+            error_rate="$calculated_error_rate"
+        fi
+        
+        # Create summary report
         cat > "$OUTPUT_DIR/test-summary.md" << EOF
 # Load Test Results
 
@@ -254,24 +266,26 @@ collect_test_results() {
 - **Error Rate:** ${error_rate}%
 
 ## Test Status
-$(if [[ "$error_rate" != "N/A" && "$error_rate" != "" ]] && (( $(echo "$error_rate < 10" | bc -l 2>/dev/null || echo 0) )); then echo "✅ **PASSED** - Error rate below 10%"; elif [[ "$success_rate" != "N/A" && "$success_rate" != "" ]] && (( $(echo "$success_rate > 90" | bc -l 2>/dev/null || echo 0) )); then echo "✅ **PASSED** - Success rate above 90%"; else echo "❌ **FAILED** - Error rate above 10% or metrics unavailable"; fi)
+$(
+    if [[ "$error_rate" =~ ^[0-9]+\.?[0-9]*$ ]] && (( $(awk "BEGIN {print ($error_rate < 10)}") )); then
+        echo "✅ **PASSED** - Error rate below 10%"
+    elif [[ "$success_rate" =~ ^[0-9]+\.?[0-9]*$ ]] && (( $(awk "BEGIN {print ($success_rate > 90)}") )); then
+        echo "✅ **PASSED** - Success rate above 90%"
+    else
+        echo "❌ **FAILED** - Error rate above 10% or metrics unavailable"
+    fi
+)
 
-## Detailed Metrics Extraction Debug
+## Debug Information
 - Checks Passed: $checks_passed
 - Checks Failed: $checks_failed
-- Total Checks: $total_checks
+- Total Checks: $((checks_passed + checks_failed))
 
-## Raw Logs Sample
-\`\`\`
-$(head -30 "$OUTPUT_DIR/k6-output.log")
-...
-$(tail -20 "$OUTPUT_DIR/k6-output.log")
-\`\`\`
 EOF
         
         echo "✅ Test results processed"
         
-        # Debug: Show what we extracted
+        # Debug output
         echo "🔍 Extracted metrics:"
         echo "  - Average Duration: $avg_duration"
         echo "  - P95 Duration: $p95_duration"
@@ -284,7 +298,6 @@ EOF
         return 1
     fi
 }
-
 
 # Display test summary
 display_test_summary() {
