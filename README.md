@@ -266,4 +266,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 **Last Updated:** May 28, 2025  
 **Pipeline Version:** v1.0.0
 
-Time taken : Around 5 hours
+Time taken : Around 4-5 hours
