@@ -42,7 +42,6 @@ This project implements a comprehensive MLOps pipeline that automatically:
                               PR Comments
 
 ```
-```
 
 ## 📋 Requirements Implemented
 
@@ -100,7 +99,6 @@ bash /scripts/load-test.sh
     ├── load-test-results/              # Generated test artifacts 
 |
 └── README.md                       # This documentation
-```
 ```
 
 ## 🔧 Configuration
