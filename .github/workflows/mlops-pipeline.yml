@@ -91,32 +91,64 @@ jobs:
           
           echo "✅ Cluster validation completed successfully"
       
+      - name: Deploy Ingress Controller
+        if: steps.cluster-provision.outputs.cluster_ready == 'true'
+        id: ingress-deploy
+        run: |
+          echo "📦 Deploying ingress controller and services..."
+          bash scripts/deploy-ingress.sh
+          echo "ingress_ready=true" >> $GITHUB_OUTPUT
+
+      - name: Test Ingress Connectivity
+        if: steps.ingress-deploy.outputs.ingress_ready == 'true'
+        id: ingress-test
+        run: |
+          echo "🧪 Testing ingress connectivity..."
+          bash scripts/test-ingress.sh
+          echo "ingress_test_passed=true" >> $GITHUB_OUTPUT
+
+      - name: Run Load Testing
+        if: steps.ingress-test.outputs.ingress_test_passed == 'true'
+        id: load-test
+        run: |
+          echo "🚀 Running load testing..."
+          bash scripts/load-test.sh
+          echo "load_test_completed=true" >> $GITHUB_OUTPUT
+      
       - name: Post Cluster Status to PR
         if: always()
         uses: actions/github-script@v7
         with:
           script: |
             const clusterReady = '${{ steps.cluster-provision.outputs.cluster_ready }}' === 'true';
-            const status = clusterReady ? '✅ Success' : '❌ Failed';
-            const emoji = clusterReady ? '🎉' : '💥';
+            const ingressReady = '${{ steps.ingress-deploy.outputs.ingress_ready }}' === 'true';
+            const ingressTestPassed = '${{ steps.ingress-test.outputs.ingress_test_passed }}' === 'true';
+            const loadTestCompleted = '${{ steps.load-test.outputs.load_test_completed }}' === 'true';
             
-            const body = `${emoji} **Task 2: Kubernetes Cluster Provisioning**
+            const getStatus = (condition) => condition ? '✅ Success' : '❌ Failed';
+            const getEmoji = (condition) => condition ? '🎉' : '💥';
             
-            **Status:** ${status}
-            **Cluster Name:** ${{ env.CLUSTER_NAME }}
-            **Nodes:** ${clusterReady ? '3 nodes (1 control-plane, 2 workers)' : 'Provisioning failed'}
+            let body = `## ${getEmoji(clusterReady)} MLOps Pipeline Status Report
             
-            **Configuration:**
-            - Multi-node setup with KinD
-            - Port mappings for ingress (80, 443, 30080, 30081)
-            - Pod subnet: 10.244.0.0/16
-            - Service subnet: 10.96.0.0/12
+            ### 📊 Pipeline Execution Summary
             
-            **Next Steps:**
-            ${clusterReady ? '- ✅ Ready for Task 3: Ingress Controller Setup' : '- 🔄 Retry cluster provisioning'}
+            | Task | Status | Details |
+            |------|--------|---------|
+            | **Cluster Provisioning** | ${getStatus(clusterReady)} | ${clusterReady ? '3 nodes (1 control-plane, 2 workers)' : 'Provisioning failed'} |
+            | **Ingress Deployment** | ${getStatus(ingressReady)} | ${ingressReady ? 'NGINX ingress controller deployed' : 'Deployment failed'} |
+            | **Health Validation** | ${getStatus(ingressTestPassed)} | ${ingressTestPassed ? 'foo.localhost & bar.localhost responding' : 'Connectivity tests failed'} |
+            | **Load Testing** | ${getStatus(loadTestCompleted)} | ${loadTestCompleted ? 'k6 load test executed' : 'Load test failed'} |
             
-            ---
-            *Updated at: ${new Date().toISOString()}*`;
+            ### 🔧 Infrastructure Configuration
+            - **Cluster Name:** ${{ env.CLUSTER_NAME }}
+            - **Port Mappings:** 80, 443, 30080, 30081
+            - **Pod Subnet:** 10.244.0.0/16
+            - **Service Subnet:** 10.96.0.0/12
+            
+            ### 🎯 Service Endpoints
+            ${ingressTestPassed ? '- ✅ http://foo.localhost (returns "foo")' : '- ❌ foo.localhost not accessible'}
+            ${ingressTestPassed ? '- ✅ http://bar.localhost (returns "bar")' : '- ❌ bar.localhost not accessible'}
+            `;
             
             await github.rest.issues.createComment({
               issue_number: context.issue.number,
@@ -124,17 +156,97 @@ jobs:
               repo: context.repo.repo,
               body: body
             });
+
+      - name: Post Load Test Results to PR
+        if: always() && steps.load-test.outputs.load_test_completed == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            // Read load test results
+            let loadTestResults = 'Load test results not available';
+            try {
+              loadTestResults = fs.readFileSync('load-test-results/test-summary.md', 'utf8');
+            } catch (error) {
+              console.log('Could not read load test results:', error.message);
+              loadTestResults = `❌ **Load Test Results Unavailable**
+              
+              Error reading results: ${error.message}
+              
+              Please check the workflow logs for detailed information.`;
+            }
+            
+            const body = `## 🚀 Load Testing Results
+            
+            ${loadTestResults}
+            
+            ### 📈 Performance Analysis
+            - **Test Duration:** 30 seconds
+            - **Virtual Users:** 10 concurrent users
+            - **Target Services:** foo.localhost, bar.localhost
+            - **Traffic Pattern:** Randomized between services
+            
+            ### 🔍 Quality Gates
+            - **Response Time Threshold:** < 500ms (95th percentile)
+            - **Error Rate Threshold:** < 10%
+            - **Success Criteria:** All thresholds must be met
+            
+            ### 📊 CI Pipeline Completion Status
+            - ✅ **Task 2:** Kubernetes Cluster Provisioning
+            - ✅ **Task 3:** Ingress Controller Deployment  
+            - ✅ **Task 4:** HTTP-echo Service Deployments
+            - ✅ **Task 5:** Ingress Routing Configuration
+            - ✅ **Task 6:** Health Checks & Validation
+            - ✅ **Task 7:** Load Testing Execution
+            - ✅ **Task 8:** Automated Results Reporting
+            
+            ---
+            *Pipeline completed at: ${new Date().toISOString()}*
+            *Workflow run: ${{ github.run_id }}*`;
+            
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+      - name: Upload Load Test Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-test-results-${{ github.run_id }}
+          path: load-test-results/
+          retention-days: 30
+
+      - name: Upload Cluster Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cluster-debug-logs-${{ github.run_id }}
+          path: |
+            /tmp/kind-logs-*
+            ~/.kube/config
+          retention-days: 7
+          if-no-files-found: ignore
       
-      # Placeholder for next tasks
-      - name: Prepare for Next Tasks
-        if: steps.cluster-provision.outputs.cluster_ready == 'true'
+      - name: Pipeline Summary
+        if: always()
         run: |
-          echo "🎯 Cluster provisioning completed successfully!"
-          echo "Ready for upcoming tasks:"
-          echo "  - Task 3: Ingress Controller Deployment"
-          echo "  - Task 4: HTTP-echo Deployments"
-          echo "  - Task 5: Ingress Routing Configuration"
-          echo "  - Task 6: Health Checks"
-          echo "  - Task 7: Load Testing"
-          echo "  - Task 8: Results Reporting"
+          echo "🎯 MLOps Pipeline Execution Summary"
+          echo "=================================="
+          echo "Cluster Provisioning: ${{ steps.cluster-provision.outputs.cluster_ready == 'true' && '✅ SUCCESS' || '❌ FAILED' }}"
+          echo "Ingress Deployment: ${{ steps.ingress-deploy.outputs.ingress_ready == 'true' && '✅ SUCCESS' || '❌ FAILED' }}"
+          echo "Health Validation: ${{ steps.ingress-test.outputs.ingress_test_passed == 'true' && '✅ SUCCESS' || '❌ FAILED' }}"
+          echo "Load Testing: ${{ steps.load-test.outputs.load_test_completed == 'true' && '✅ SUCCESS' || '❌ FAILED' }}"
+          echo ""
+          echo "🔗 Artifacts uploaded for detailed analysis"
+          echo "📊 Results posted to PR for review"
+          echo ""
+          if [[ "${{ steps.load-test.outputs.load_test_completed }}" == "true" ]]; then
+            echo "🎉 All MLOps pipeline tasks completed successfully!"
+          else
+            echo "⚠️ Pipeline completed with some failures - check logs above"
+          fi
 
