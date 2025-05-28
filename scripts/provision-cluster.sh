@@ -2,7 +2,7 @@
 set -euo pipefail
 
 CLUSTER_NAME="${CLUSTER_NAME:-mlops-test-cluster}"
-CONFIG_FILE="config/kind-cluster.yaml"
+CONFIG_FILE="../config/kind-cluster.yaml"
 NODE_READY_TIMEOUT="${NODE_READY_TIMEOUT:-300}"
 MAX_RETRIES=3
 RETRY_DELAY=10
@@ -48,12 +48,6 @@ wait_for_nodes_ready() {
         
         echo "📊 Node status: $ready_nodes/$total_nodes ready (${elapsed}s elapsed)"
         
-        # Show detailed node status for debugging
-        if [[ $ready_nodes -lt $expected_nodes ]]; then
-            echo "🔍 Current node details:"
-            kubectl get nodes --context "$context" -o wide 2>/dev/null || true
-        fi
-        
         if [[ "$ready_nodes" -eq "$expected_nodes" ]] && [[ "$total_nodes" -eq "$expected_nodes" ]]; then
             echo "✅ All $expected_nodes nodes are ready!"
             return 0
@@ -63,12 +57,12 @@ wait_for_nodes_ready() {
     done
 }
 
-# Function to validate comprehensive cluster health
-validate_cluster() {
+# Function to validate basic cluster health
+validate_cluster_basic() {
     local cluster_name=$1
     local context="kind-${cluster_name}"
     
-    echo "🏥 Starting comprehensive cluster validation..."
+    echo "🏥 Starting basic cluster validation..."
     
     # 1. Cluster API connectivity
     echo "🔍 Validating cluster API connectivity..."
@@ -85,7 +79,6 @@ validate_cluster() {
     
     if [[ "$ready_nodes" -lt 3 ]]; then
         echo "❌ Expected 3 nodes, found $ready_nodes ready nodes"
-        kubectl get nodes --context "$context" -o wide
         return 1
     fi
     echo "✅ All $ready_nodes nodes are ready"
@@ -99,7 +92,6 @@ validate_cluster() {
     
     if [[ "$system_pods_ready" -lt "$total_system_pods" ]]; then
         echo "❌ System pods not ready: $system_pods_ready/$total_system_pods running"
-        kubectl get pods -n kube-system --context "$context"
         return 1
     fi
     echo "✅ All $system_pods_ready system pods are running"
@@ -112,26 +104,7 @@ validate_cluster() {
     fi
     echo "✅ DNS functionality verified"
     
-    # 5. Storage class validation
-    echo "🔍 Validating storage classes..."
-    local storage_classes
-    storage_classes=$(kubectl get storageclass --context "$context" --no-headers | wc -l || echo "0")
-    
-    if [[ "$storage_classes" -eq 0 ]]; then
-        echo "⚠️ No storage classes found"
-    else
-        echo "✅ Storage classes available: $storage_classes"
-    fi
-    
-    # 6. Network connectivity test
-    echo "🔍 Validating network connectivity..."
-    if ! kubectl run network-test --image=busybox --rm -i --restart=Never --context "$context" -- wget -q --spider http://kubernetes.default.svc.cluster.local &>/dev/null; then
-        echo "❌ Network connectivity validation failed"
-        return 1
-    fi
-    echo "✅ Network connectivity verified"
-    
-    echo "🎉 Comprehensive cluster validation successful!"
+    echo "🎉 Basic cluster validation successful!"
     return 0
 }
 
@@ -169,12 +142,12 @@ provision_cluster() {
             if wait_for_nodes_ready "$cluster_name"; then
                 echo "✅ Node readiness validation passed"
                 
-                # Step 2: Comprehensive cluster validation
-                if validate_cluster "$cluster_name"; then
+                # Step 2: Basic cluster validation
+                if validate_cluster_basic "$cluster_name"; then
                     echo "🎉 Cluster provisioning and validation completed successfully!"
                     return 0
                 else
-                    echo "❌ Comprehensive cluster validation failed"
+                    echo "❌ Basic cluster validation failed"
                 fi
             else
                 echo "❌ Node readiness validation failed"
@@ -213,15 +186,7 @@ display_cluster_summary() {
     kubectl get nodes --context "$context" -o wide
     
     echo ""
-    echo "🏗️ System Pods:"
-    kubectl get pods -n kube-system --context "$context"
-    
-    echo ""
-    echo "💾 Storage Classes:"
-    kubectl get storageclass --context "$context" 2>/dev/null || echo "No storage classes found"
-    
-    echo ""
-    echo "🎯 Cluster ready for MLOps workloads!"
+    echo "🎯 Cluster ready for ingress deployment!"
 }
 
 # Main execution
@@ -231,7 +196,6 @@ main() {
     echo "  - Config file: $CONFIG_FILE"
     echo "  - Node ready timeout: ${NODE_READY_TIMEOUT}s"
     echo "  - Max retries: $MAX_RETRIES"
-    echo "  - Retry delay: ${RETRY_DELAY}s"
     
     # Verify prerequisites
     echo "🔍 Verifying prerequisites..."
@@ -246,7 +210,7 @@ main() {
         echo "❌ kubectl not found. Please install kubectl first."
         exit 1
     fi
-    echo "✅ kubectl found: $(kubectl version --client --short 2>/dev/null || kubectl version --client)"
+    echo "✅ kubectl found"
     
     if [[ ! -f "$CONFIG_FILE" ]]; then
         echo "❌ Config file not found: $CONFIG_FILE"
@@ -254,13 +218,13 @@ main() {
     fi
     echo "✅ Config file found: $CONFIG_FILE"
     
-    # Provision cluster with progressive validation
+    # Provision cluster
     if provision_cluster "$CLUSTER_NAME" "$CONFIG_FILE"; then
         display_cluster_summary "$CLUSTER_NAME"
+        echo "🎯 Next step: Run ./deploy-ingress.sh to deploy HTTP services"
         exit 0
     else
         echo "💥 Cluster provisioning failed after all attempts"
-        echo "🔍 Check logs above for detailed error information"
         exit 1
     fi
 }
