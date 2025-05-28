@@ -2,7 +2,8 @@
 set -euo pipefail
 
 CLUSTER_NAME="${CLUSTER_NAME:-mlops-test-cluster}"
-CONFIG_FILE="../config/kind-cluster.yaml"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="$(dirname "$SCRIPT_DIR")/config/kind-cluster.yaml"
 NODE_READY_TIMEOUT="${NODE_READY_TIMEOUT:-300}"
 MAX_RETRIES=3
 RETRY_DELAY=10
