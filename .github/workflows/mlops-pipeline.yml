@@ -249,7 +249,6 @@ jobs:
           else
             echo "⚠️ Pipeline completed with some failures - check logs above"
           fi
-=======
       - name: Validate PR Trigger
         run: |
           echo "🔍 Validating PR trigger..."
@@ -317,5 +316,4 @@ jobs:
           echo "  - Application deployments"
           echo "  - Load testing"
           echo "  - Results reporting"
->>>>>>> 1629dec5755779cb0630a892f8c98e87fa03813d
 
