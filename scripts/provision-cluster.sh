@@ -221,7 +221,7 @@ main() {
     # Provision cluster
     if provision_cluster "$CLUSTER_NAME" "$CONFIG_FILE"; then
         display_cluster_summary "$CLUSTER_NAME"
-        echo "🎯 Next step: Run ./deploy-ingress.sh to deploy HTTP services"
+        echo "🎯 Next step: Run bash deploy-ingress.sh to deploy HTTP services"
         exit 0
     else
         echo "💥 Cluster provisioning failed after all attempts"
