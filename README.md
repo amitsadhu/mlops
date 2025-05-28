@@ -13,7 +13,32 @@ This project implements a comprehensive MLOps pipeline that automatically:
 - Reports results via GitHub PR comments
 
 ## 🏗️ Architecture
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐ │   GitHub PR     │───▶│  GitHub Actions  │───▶│  KinD Cluster   │ │   Trigger       │    │     Workflow     │    │   (3 nodes)     │ └─────────────────┘    └──────────────────┘    └─────────────────┘ │                        │ ▼                        ▼ ┌──────────────────┐    ┌─────────────────┐ │  Load Testing    │    │ Ingress + Apps  │ │     (k6)         │    │ foo/bar services│ └──────────────────┘    └─────────────────┘
+
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   GitHub PR     │───▶│  GitHub Actions  │───▶│  KinD Cluster   │
+│   Trigger       │    │     Workflow     │    │   (3 nodes)     │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+         ▲                        │                        │
+         │                        │                        ▼
+         │                        │               ┌─────────────────┐
+         │                        │               │ Ingress + Apps  │
+         │                        │               │ foo/bar services│
+         │                        │               └─────────────────┘
+         │                        │                        │
+         │                        ▼                        ▼
+         │               ┌──────────────────┐    ┌─────────────────┐
+         │               │  Load Testing    │───▶│    Results      │
+         │               │     (k6)         │    │   Collection    │
+         │               └──────────────────┘    └─────────────────┘
+         │                                                │
+         │                                                ▼
+         │                                       ┌─────────────────┐
+         │                                       │   Performance   │
+         │                                       │    Metrics      │
+         │                                       └─────────────────┘
+         │                                                │
+         └────────────────────────────────────────────────┘
+                              PR Comments
 
 
 ## 📋 Requirements Implemented
@@ -54,7 +79,22 @@ bash /scripts/load-test.sh
 4. View automated results in PR comments
 
 ## 📁 Project Structure
-├── .github/workflows/ │   └── mlops-pipeline.yml          # Main CI/CD workflow ├── config/ │   └── kind-cluster.yaml           # Kubernetes cluster configuration ├── scripts/ │   ├── provision-cluster.sh        # Cluster provisioning automation │   ├── deploy-ingress.sh           # Ingress and services deployment │   ├── test-ingress.sh             # Health validation testing │   └── load-test.sh                # k6 load testing execution ├── load-test-results/              # Generated test artifacts └── README.md                       # This documentation
+├── .github/workflows/ 
+│   └── mlops-pipeline.yml          # Main CI/CD workflow 
+├── config/ 
+│       └── kind-cluster.yaml           # Kubernetes cluster configuration 
+├── scripts/ 
+│   ├── provision-cluster.sh        # Cluster provisioning automation 
+    │   
+    ├── deploy-ingress.sh           # Ingress and services deployment 
+    │   
+    ├── test-ingress.sh             # Health validation testing 
+    │   
+    └── load-test.sh                # k6 load testing execution
+    |
+    ├── load-test-results/              # Generated test artifacts 
+|
+└── README.md                       # This documentation
 
 
 ## 🔧 Configuration
@@ -65,7 +105,10 @@ bash /scripts/load-test.sh
 - **Network:** Pod subnet 10.244.0.0/16, Service subnet 10.96.0.0/12
 
 ### Environment Variables
-CLUSTER_NAME=mlops-test-cluster     # Kubernetes cluster name NODE_READY_TIMEOUT=300              # Node readiness timeout (seconds) VUS=10                              # Virtual users for load testing DURATION=30s                        # Load test duration
+CLUSTER_NAME=mlops-test-cluster     # Kubernetes cluster name 
+NODE_READY_TIMEOUT=300              # Node readiness timeout (seconds) 
+VUS=10                              # Virtual users for load testing 
+DURATION=30s                        # Load test duration
 
 
 ## 🧪 Testing Strategy
@@ -219,3 +262,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 **Last Updated:** May 28, 2025  
 **Pipeline Version:** v1.0.0
 
+Time taken : Around 5 hours
