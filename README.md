@@ -63,6 +63,7 @@ This project implements a comprehensive MLOps pipeline that automatically:
 - GitHub repository with Actions enabled
 
 ### Local Testing
+```
 Clone the repository
 git clone  cd 
 Make scripts executable
@@ -72,7 +73,7 @@ bash /scripts/provision-cluster.sh 
 bash /scripts/deploy-ingress.sh 
 bash /scripts/test-ingress.sh 
 bash /scripts/load-test.sh
-
+```
 
 ### CI/CD Testing
 1. Create a pull request to `main` branch
@@ -109,11 +110,12 @@ bash /scripts/load-test.sh
 - **Network:** Pod subnet 10.244.0.0/16, Service subnet 10.96.0.0/12
 
 ### Environment Variables
+```
 CLUSTER_NAME=mlops-test-cluster     # Kubernetes cluster name 
 NODE_READY_TIMEOUT=300              # Node readiness timeout (seconds) 
 VUS=10                              # Virtual users for load testing 
 DURATION=30s                        # Load test duration
-
+```
 
 ## 🧪 Testing Strategy
 
