@@ -63,7 +63,6 @@ This project implements a comprehensive MLOps pipeline that automatically:
 - GitHub repository with Actions enabled
 
 ### Local Testing
-```
 Clone the repository
 ```
 git clone  cd
