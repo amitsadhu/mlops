@@ -65,10 +65,15 @@ This project implements a comprehensive MLOps pipeline that automatically:
 ### Local Testing
 ```
 Clone the repository
-git clone  cd 
+```
+git clone  cd
+```
 Make scripts executable
+```
 chmod +x scripts/*.sh
+```
 Run the complete pipeline locally
+```
 bash /scripts/provision-cluster.sh 
 bash /scripts/deploy-ingress.sh 
 bash /scripts/test-ingress.sh 
